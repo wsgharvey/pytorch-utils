@@ -5,6 +5,7 @@ from time import time
 from tqdm import tqdm
 from cached_property import cached_property
 import operator
+from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ import torch.nn as nn
 from ptutils.datasets import get_dataloader, get_dataset_info
 from ptutils.utils import RNG, Averager, DictAverager,\
     display, display_level, get_args_decorator, make_hashable, \
-    to_numpy
+    to_numpy, IntSeq
 
 
 class Trainable(nn.Module):
@@ -21,14 +22,11 @@ class Trainable(nn.Module):
     Trainable nets should be subclass of this. Implements saving
     checkpoints, controlling random seed etc.
     """
-    save_at_times = []
-    save_at_epochs = []
     save_dir = "ckpts"
 
     @get_args_decorator(1)
     def __init__(self, seed, optimiser_type, lr,
-                 data_name, save_every_sec=3600,
-                 extra_things_to_use_in_hash=tuple(),
+                 data_name, extra_things_to_use_in_hash=tuple(),
                  all_args=None, **nn_kwargs):
         """
         `data_name` is just used to create filename
@@ -43,11 +41,11 @@ class Trainable(nn.Module):
 
         # static
         self.init_seed = seed
-        self.save_every_sec = save_every_sec
         self.data_name = data_name
+        self.init_save_valid_conditions()
 
         # change throughout training and saved in checkpoints
-        self.rng = RNG(seed=seed)
+        self.rng = RNG(seed=self.init_seed)
         with self.rng:
             self.init_nn(**nn_kwargs)
             self.optim = optimiser_type(self.parameters(), lr=lr)
@@ -55,12 +53,46 @@ class Trainable(nn.Module):
         self.losses = {'train': [], 'valid': []}
         self.logs = {'train': {}, 'valid': {}}
         self.training_time = 0
-        # map checkpoints in save_at_times to epochs
-        # they were saved at
-        self.timed_checkpoint_epochs = {}
+        # structures to track validation/saving by mapping valid/save
+        # epochs to list of times they represent
+        self.timed_valid_epochs = OrderedDict([])
+        self.timed_save_epochs = OrderedDict([])
 
         # change throughout training and untracked
-        self.last_checkpoint_training_time = 0
+        None
+
+    def init_save_valid_conditions(self):
+        self.save_at_times = IntSeq([])
+        self.save_at_epochs = IntSeq([])
+        self.valid_at_times = IntSeq([])
+        self.valid_at_epochs = IntSeq([])
+
+    def set_save_valid_conditions(self, N, save_or_valid,
+                                  every_or_eachof, sec_or_epochs):
+        """
+        set condition to save/validate wither every so often or at specified epochs/times
+        """
+        def get_bool(arg, is_this, not_this):
+            return {is_this: True, not_this: False}[arg]
+        is_save = get_bool(save_or_valid, 'save', 'valid')
+        is_every = get_bool(every_or_eachof, 'every', 'eachof')
+        is_sec = get_bool(sec_or_epochs, 'sec', 'epochs')
+
+        if is_every:
+            def get_seq():
+                x = 0
+                while True:
+                    yield x; x += N
+            seq = get_seq()
+        else:
+            seq = N
+        add_to = {
+            (False, False): self.valid_at_epochs,
+            (False, True): self.valid_at_times,
+            (True, False): self.save_at_epochs,
+            (True, True): self.save_at_times,
+        }[(is_save, is_sec)]
+        add_to.mix_in_iterable(seq)
 
     def init_nn(self, **nn_kwargs):
 
@@ -71,7 +103,7 @@ class Trainable(nn.Module):
         # loss should be mean over minibatch
         raise NotImplementedError
 
-    def valid_loss(self, *args, **kwargs):
+    def valid_metric(self, *args, **kwargs):
 
         return self.loss(*args, **kwargs)
 
@@ -120,11 +152,21 @@ class Trainable(nn.Module):
             self.logs[mode][key].append(
                 to_numpy(value))
 
+    def validate(self):
+        """
+        To be implemented by subclasses. See
+        ImageClassifier.validate for example.
+
+        Should use begin_valid(), valid_batch(...),
+        and end_valid().
+        """
+        raise NotImplementedError
+
     def begin_valid(self):
 
         self.eval()
         self.valid_rng = RNG(0)
-        self.valid_loss_averager = Averager()
+        self.valid_metric_averager = Averager()
         self.valid_log_averager = DictAverager()
 
     def valid_batch(self, *data, batch_size=None):
@@ -133,8 +175,8 @@ class Trainable(nn.Module):
             batch_size = data[0].shape[0]
         with torch.no_grad():
             with self.valid_rng:
-                self.valid_loss_averager.include(
-                    self.valid_loss(*data).item(), batch_size
+                self.valid_metric_averager.include(
+                    self.valid_metric(*data).item(), batch_size
                 )
                 self.valid_log_averager.include(
                     self.log, batch_size
@@ -143,7 +185,7 @@ class Trainable(nn.Module):
     def end_valid(self):
 
         self.losses['valid'].append(
-            self.valid_loss_averager.avg)
+            self.valid_metric_averager.avg)
         # average stuff in valid_log
         self.update_log('valid', self.valid_log_averager.avg)
 
@@ -170,47 +212,65 @@ class Trainable(nn.Module):
 
         self.epochs += 1
         self.training_time += time() - self.epoch_begin_time
-        self.save_if_necessary()
+        self.valid_and_save_if_necessary()
 
-    def save_if_necessary(self):
+    def applicable_action_times(self, at_epochs, at_times,
+                                timed_epochs):
         """
-        Save checkpoint if any of 3 conditions are met:
-        - more than a certain time since last save,
-        - at a specified number of epochs,
-        - first chance to save after a specified time
+        - action is either save or valid
+        - if action is required, returns (possibly empty)
+          list of applicable times from at_times
+        - otherwise, returns None
         """
+        all_times = sum(timed_epochs.values(), [0.])
+        prev_time = all_times[-1]
+        applicable_times = list(at_times.all_between(
+            prev_time, self.training_time,
+            closed_lower=False, closed_upper=True
+        ))
+        if len(applicable_times) > 0:
+            return applicable_times
+        elif self.epochs in at_epochs:
+            return []
+        else:
+            return None
 
-        time_since_checkpoint = self.training_time\
-            - self.last_checkpoint_training_time
-        remaining_save_times = [
-            save_t for save_t in self.save_at_times
-            if save_t > self.last_checkpoint_training_time]
-        next_save_at_time = min(remaining_save_times) if\
-            len(remaining_save_times) > 0 else np.inf
-        is_save_time = self.training_time > next_save_at_time
+    def action_if_necessary(self, at_epochs, at_times,
+                            timed_epochs, action):
 
-        if (time_since_checkpoint > self.save_every_sec)\
-           or (self.epochs in self.save_at_epochs)\
-           or is_save_time:
-            self.save_checkpoint()
-            self.last_checkpoint_training_time =\
-                self.training_time
-            if is_save_time:
-                self.timed_checkpoint_epochs[next_save_at_time]\
-                    = self.epochs
+        times = self.applicable_action_times(
+            at_epochs, at_times, timed_epochs)
+        if times is not None:
+            timed_epochs[self.epochs] = times
+            action()
+
+    def valid_and_save_if_necessary(self):
+
+        # validation
+        self.action_if_necessary(
+            self.valid_at_epochs, self.valid_at_times,
+            self.timed_valid_epochs, self.validate
+        )
+        # saving
+        self.action_if_necessary(
+            self.save_at_epochs, self.save_at_times,
+            self.timed_save_epochs, self.save_checkpoint
+        )
 
     def save_checkpoint(self):
-        display('info', 'Saving Checkpoint.')
 
+        display('info', 'Saving Checkpoint.')
         path = self.get_path(self.epochs)
         f = {'optim': self.optim.state_dict(),
              'rng': self.rng.get_state(),
              'params': self.state_dict(),
-             'losses': self.losses,
              'epochs': self.epochs,
+             'losses': self.losses,
              'logs': self.logs,
              'training_time': self.training_time,
-             'timed_checkpoints': self.timed_checkpoint_epochs}
+             'timed_valid_epochs': self.timed_valid_epochs,
+             'timed_save_epochs': self.timed_save_epochs,
+             }
         torch.save(f, path)
 
     def load_timed_checkpoint(self, training_time):
@@ -249,11 +309,12 @@ class Trainable(nn.Module):
         self.rng.set_state(f['rng'])
         self.optim.load_state_dict(f['optim'])
         self.load_state_dict(f['params'])
+        self.epochs = f['epochs']
         self.losses = f['losses']
         self.logs = f['logs']
-        self.epochs = f['epochs']
         self.training_time = f['training_time']
-        self.timed_checkpoint_epochs = f['timed_checkpoints']
+        self.timed_valid_epochs = f['timed_valid_epochs']
+        self.timed_save_epochs = f['timed_save_epochs']
         display("info",
                 f"Loaded network trained for {self.epochs}"+\
                 f" epochs in {self.training_time} seconds.")
@@ -268,8 +329,7 @@ class ImageClassifier(Trainable):
     sends data to correct device.
     """
 
-    best_valid_op = min # used to decide if valid loss is new best
-
+    best_valid_op = min    # used to decide if valid loss is new best
 
     def __init__(self, dataset_name, batch_size,
                  *args, dataloader_kwargs={}, **kwargs):

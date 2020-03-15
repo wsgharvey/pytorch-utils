@@ -1,8 +1,8 @@
 from collections import OrderedDict
 import random
 import torch
+from itertools import tee
 import numpy as np
-
 
 # RNG --------------------------------------------------
 
@@ -253,7 +253,6 @@ def to_numpy(t):
     else:
         return np.array(t)
 
-
 def state_dict_to(state_dict, device):
 
     # TODO debug - maybe something recursive
@@ -261,7 +260,6 @@ def state_dict_to(state_dict, device):
     # in place operation
     for name, state in state_dict.items():
         state_dict[name] = state.to(device)
-
 
 class no_grad_decorator():
 
@@ -271,3 +269,96 @@ class no_grad_decorator():
             with torch.no_grad():
                 return f(*args, **kwargs)
         return wrapped_f
+
+def merge_iterators(iter1, iter2):
+    # sorted merge of potentially infinite sorted iterators
+    def next_value(iterator):
+        iterator, copy = tee(iterator)
+        try:
+            next_val = next(copy)
+        except StopIteration:
+            next_val = None
+        return iterator, next_val
+    while True:
+        iter1, v1 = next_value(iter1)
+        iter2, v2 = next_value(iter2)
+        if v1 is None and v2 is None:
+            return
+        elif v1 is None:
+            yield next(iter2)
+        elif v2 is None:
+            yield next(iter1)
+        else:
+            if v1 < v2:
+                yield next(iter1)
+            elif v1 == v2:
+                # discard value
+                _ = next(iter1)
+            else:
+                yield next(iter2)
+
+class IntSeq():
+    # handles a potentially infinite sorted sequence of integers
+
+    def __init__(self, iterable,
+                 n_to_check=100):
+
+        self.set_iterator(iterable, n_to_check)
+
+    def set_iterator(self, iterable, n_to_check):
+
+        self._iterator = iter(iterable)
+        self.check_sorted_ints(n_to_check)
+
+    def check_sorted_ints(self, n_to_check):
+
+        last = -np.inf
+        for item, n in zip(self,
+                           range(n_to_check)):
+            assert type(item) == int
+            assert item > last
+            last = item
+
+    def __iter__(self):
+
+        self._iterator, x = tee(self._iterator)
+        yield from x
+
+    def __contains__(self, item):
+
+        assert type(item) == int
+        for other in self:
+
+            if other == item:
+                return True
+            elif other > item:
+                return False
+
+    def first_greater_than(self, item):
+
+        for other in self:
+            if other > item:
+                return other
+
+    def all_between(self, lower, upper,
+                    closed_lower, closed_upper):
+
+        high_enough = lambda x: (x >= lower)\
+            if closed_lower else (x > lower)
+        low_enough = lambda x: (x <= upper)\
+            if closed_upper else (x < upper)
+
+        for x in self:
+            if not low_enough(x):
+                break
+            if high_enough(x):
+                yield x
+
+    def mix_in_iterable(self, new_iterable,
+                        n_to_check=100):
+
+        self.set_iterator(
+            merge_iterators(
+                self._iterator,
+                iter(new_iterable)),
+            n_to_check)
