@@ -1,1 +1,1 @@
-from .trainer import Trainable, ImageClassifier
+from .trainer import Trainable, HasDataloaderMixin, ImageClassifier

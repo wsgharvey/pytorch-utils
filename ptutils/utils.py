@@ -1,3 +1,4 @@
+import zlib
 from collections import OrderedDict
 import random
 import torch
@@ -235,6 +236,12 @@ def make_hashable(obj):
             return obj.__repr__()
         except TypeError:
             return str(obj)
+
+def robust_hash(obj):
+    return str(
+        zlib.adler32(
+            make_hashable(obj).__str__().encode('utf-8')
+        ))
 
 # pytorch stuff -----------------------------------
 

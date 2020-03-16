@@ -16,8 +16,8 @@ class TestSubclass(Trainable):
     def easy_init():
         trainable = TestSubclass(
             seed=1,
-            optimiser_type=torch.optim.Adam,
-            lr=3e-4,
+            optim_type=torch.optim.Adam,
+            optim_kwargs={'lr': 3e-4},
             data_name='unittest',
             h=64
         )
@@ -81,11 +81,11 @@ class Tester(TestCase):
 
         tr = TestSubclass.easy_init()
         tr.set_save_valid_conditions(
-            2, 'valid', 'every', 'epochs')
+            'valid', 'every', 2, 'epochs')
         tr.set_save_valid_conditions(
-            3, 'valid', 'every', 'epochs')
+            'valid', 'every', 3, 'epochs')
         tr.set_save_valid_conditions(
-            [4, 5, 6], 'valid', 'eachof', 'epochs'
+            'valid', 'eachof', [4, 5, 6], 'epochs'
         )
         for _ in range(9):
             tr.train_one_epoch()
@@ -107,7 +107,7 @@ class Tester(TestCase):
         os.mkdir(tr.save_dir)
 
         tr.set_save_valid_conditions(
-            2, 'save', 'every', 'epochs'
+            'save', 'every', 2, 'epochs'
         )
         for _ in range(10):
             tr.train_one_epoch()

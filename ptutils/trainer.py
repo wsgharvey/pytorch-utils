@@ -1,4 +1,3 @@
-import zlib
 from os.path import join, basename
 from glob import glob
 from time import time
@@ -13,7 +12,7 @@ import torch.nn as nn
 
 from ptutils.datasets import get_dataloader, get_dataset_info
 from ptutils.utils import RNG, Averager, DictAverager,\
-    display, display_level, get_args_decorator, make_hashable, \
+    display, display_level, get_args_decorator, robust_hash, \
     to_numpy, IntSeq
 
 
@@ -25,17 +24,13 @@ class Trainable(nn.Module):
     save_dir = "ckpts"
 
     @get_args_decorator(1)
-    def __init__(self, seed, optimiser_type, lr,
+    def __init__(self, seed, optim_type, optim_kwargs,
                  data_name, extra_things_to_use_in_hash=tuple(),
                  all_args=None, **nn_kwargs):
         """
         `data_name` is just used to create filename
         """
-        args = make_hashable(all_args)
-        self.args_hash = str(
-            zlib.adler32(
-                args.__str__().encode('utf-8')
-            ))
+        self.args_hash = robust_hash(all_args)
 
         super().__init__()
 
@@ -48,7 +43,7 @@ class Trainable(nn.Module):
         self.rng = RNG(seed=self.init_seed)
         with self.rng:
             self.init_nn(**nn_kwargs)
-            self.optim = optimiser_type(self.parameters(), lr=lr)
+            self.optim = optim_type(self.parameters(), **optim_kwargs)
         self.epochs = 0
         self.losses = {'train': [], 'valid': []}
         self.logs = {'train': {}, 'valid': {}}
@@ -67,8 +62,8 @@ class Trainable(nn.Module):
         self.valid_at_times = IntSeq([])
         self.valid_at_epochs = IntSeq([])
 
-    def set_save_valid_conditions(self, N, save_or_valid,
-                                  every_or_eachof, sec_or_epochs):
+    def set_save_valid_conditions(self, save_or_valid,
+                                  every_or_eachof, N, sec_or_epochs):
         """
         set condition to save/validate wither every so often or at specified epochs/times
         """
@@ -115,7 +110,7 @@ class Trainable(nn.Module):
     @property
     def optimiser_name(self):
 
-        return f"{type(self.optim).__name__}_{self.optim.defaults['lr']}"
+        return f"{type(self.optim).__name__}_{robust_hash(self.optim.defaults)}"
 
     @property
     def name(self):
@@ -152,24 +147,15 @@ class Trainable(nn.Module):
             self.logs[mode][key].append(
                 to_numpy(value))
 
-    def validate(self):
-        """
-        To be implemented by subclasses. See
-        ImageClassifier.validate for example.
-
-        Should use begin_valid(), valid_batch(...),
-        and end_valid().
-        """
-        raise NotImplementedError
-
     def begin_valid(self):
 
         self.eval()
+        self.log = {}
         self.valid_rng = RNG(0)
         self.valid_metric_averager = Averager()
         self.valid_log_averager = DictAverager()
 
-    def valid_batch(self, *data, batch_size=None):
+    def uncontrolled_valid_batch(self, *data, batch_size=None):
 
         if batch_size is None:
             batch_size = data[0].shape[0]
@@ -182,6 +168,11 @@ class Trainable(nn.Module):
                     self.log, batch_size
                 )
 
+    def valid_batch(self, *args, **kwargs):
+
+        with self.valid_rng:
+            return self.uncontrolled_valid_batch(*args, **kwargs)
+
     def end_valid(self):
 
         self.losses['valid'].append(
@@ -193,9 +184,11 @@ class Trainable(nn.Module):
 
         self.epoch_begin_time = time()
         self.train()
+        self.log = {}
 
     def uncontrolled_step(self, *data):
 
+        start = time()
         loss = self.loss(*data)
         self.optim.zero_grad()
         loss.backward()
@@ -319,6 +312,45 @@ class Trainable(nn.Module):
                 f"Loaded network trained for {self.epochs}"+\
                 f" epochs in {self.training_time} seconds.")
         self.eval()
+
+
+class HasDataloaderMixin():
+    """
+    Mix-in for trainable objects which are simply trained by feeding
+    data from a data-loader into .step(...)
+    """
+
+    def set_dataloaders(self, train_loader, valid_loader):
+
+        self.train_loader = train_loader
+        self.valid_loader = valid_loader
+
+    def train_epoch(self):
+
+        self.begin_epoch()
+        with self.rng:
+            with tqdm(total=len(self.train_loader)) as pbar:
+                for data in self.train_loader:
+                    self.uncontrolled_step(*data)
+                    pbar.update(1)
+        self.end_epoch()
+
+    def train_n_epochs(self, max_epochs):
+
+        self.load_checkpoint()
+        while self.epochs < max_epochs:
+            self.train_epoch()
+        self.save_checkpoint()
+
+
+    def validate(self):
+
+        self.begin_valid()
+        with self.valid_rng:
+            for data in self.valid_loader:
+                self.uncontrolled_valid_batch(*data)
+        self.end_valid()
+        display("info", "validation:", self.losses['valid'][-1])
 
 
 class ImageClassifier(Trainable):
