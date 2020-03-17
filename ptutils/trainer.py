@@ -77,7 +77,8 @@ class Trainable(nn.Module):
             def get_seq():
                 x = 0
                 while True:
-                    yield x; x += N
+                    yield x
+                    x += N
             seq = get_seq()
         else:
             seq = N
@@ -215,8 +216,11 @@ class Trainable(nn.Module):
           list of applicable times from at_times
         - otherwise, returns None
         """
-        all_times = sum(timed_epochs.values(), [0.])
-        prev_time = all_times[-1]
+        all_prev_epochs = timed_epochs.keys()
+        if self.epochs in all_prev_epochs:
+            return None  # already validated at this point
+        all_prev_times = sum(timed_epochs.values(), [0.])
+        prev_time = all_prev_times[-1]
         applicable_times = list(at_times.all_between(
             prev_time, self.training_time,
             closed_lower=False, closed_upper=True
@@ -337,11 +341,11 @@ class HasDataloaderMixin():
 
     def train_n_epochs(self, max_epochs):
 
+        self.valid_and_save_if_necessary()
         self.load_checkpoint()
         while self.epochs < max_epochs:
             self.train_epoch()
         self.save_checkpoint()
-
 
     def validate(self):
 
