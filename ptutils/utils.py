@@ -262,11 +262,12 @@ def to_numpy(t):
 
 def state_dict_to(state_dict, device):
 
-    # TODO debug - maybe something recursive
-
-    # in place operation
-    for name, state in state_dict.items():
-        state_dict[name] = state.to(device)
+    if type(state_dict) == dict:
+        return {k: state_dict_to(v, device)
+                for k, v in state_dict.items()}
+    elif torch.is_tensor(state_dict):
+        return state_dict.to(device)
+    return state_dict
 
 class no_grad_decorator():
 

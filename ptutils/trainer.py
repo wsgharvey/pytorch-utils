@@ -13,7 +13,7 @@ import torch.nn as nn
 from ptutils.datasets import get_dataloader, get_dataset_info
 from ptutils.utils import RNG, Averager, DictAverager,\
     display, display_level, get_args_decorator, robust_hash, \
-    to_numpy, IntSeq
+    to_numpy, IntSeq, state_dict_to
 
 
 class Trainable(nn.Module):
@@ -301,7 +301,7 @@ class Trainable(nn.Module):
         try:
             f = torch.load(checkpoint)
         except EOFError as err:
-            print("Failed to open:", checkpoint)
+            display('error', f"Failed to open: {checkpoint}")
             raise err
         self.rng.set_state(f['rng'])
         self.optim.load_state_dict(f['optim'])
@@ -355,6 +355,80 @@ class HasDataloaderMixin():
                 self.uncontrolled_valid_batch(*data)
         self.end_valid()
         display("info", "validation:", self.losses['valid'][-1])
+
+
+class CudaCompatibleMixin():
+    """
+    A mixin for Trainables that can be run on GPU by simply moving all
+    parameters to GPU. Controls moving data to GPU
+    and saving checkpoints on CPU (for easy loading on any device).
+    """
+    @property
+    def device(self):
+        # this assumes all of self is on same device
+        return next(self.parameters()).device
+
+    def to_cuda(self):
+
+        self.cuda()
+        self.optim_to_device(self.device)
+
+    def to_cpu(self):
+
+        self.cpu()
+        self.optim_to_device(self.device)
+
+    def is_cuda(self):
+
+        return self.device.type == 'cuda'
+
+    def send_all_to_own_device(self, args):
+        def to_device_if_tensor(arg):
+            if isinstance(arg, torch.Tensor):
+                return arg.to(self.device)
+            return arg
+        return tuple(map(to_device_if_tensor, args))
+
+    def optim_to_device(self, device):
+        self.optim.load_state_dict(
+            state_dict_to(
+                self.optim.state_dict(),
+                self.device))
+
+    def on_cpu_wrapper(f):
+        def wrapped_f(self, *args, **kwargs):
+            was_cuda = self.is_cuda()
+            self.to_cpu()
+            print(f'doing {f} on {self.device}')
+            result = f(self, *args, **kwargs)
+            if was_cuda:
+                self.to_cuda()
+            return result
+        return wrapped_f
+
+    def args_to_device_wrapper(f):
+        def wrapped_f(self, *args):
+            args = self.send_all_to_own_device(args)
+            return f(self, *args)
+        return wrapped_f
+
+    # this mixin must be left of Trainable in class definition to make the below work
+
+    @on_cpu_wrapper
+    def save_checkpoint(self, *args, **kwargs):
+        super().save_checkpoint(*args, **kwargs)
+
+    @on_cpu_wrapper
+    def load_checkpoint(self, *args, **kwargs):
+        super().load_checkpoint(*args, **kwargs)
+
+    @args_to_device_wrapper
+    def uncontrolled_step(self, *data):
+        super().uncontrolled_step(*data)
+
+    @args_to_device_wrapper
+    def uncontrolled_valid_batch(self, *data):
+        super().uncontrolled_step(*data)
 
 
 class ImageClassifier(Trainable):

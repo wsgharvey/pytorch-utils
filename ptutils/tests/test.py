@@ -1,27 +1,48 @@
 import os
 import shutil
+from functools import wraps
 
 import torch
 import torch.nn as nn
 
-from ptutils import Trainable
+from ptutils import Trainable, CudaCompatibleMixin
 
 from unittest import TestCase
 
 
+test_save_dir = 'test_ckpts'
+def clean_save_dir_wrapper(foo):
+    @wraps(foo)
+    def wrapped(*args, **kwargs):
+        # set up save directory
+        if os.path.exists(test_save_dir):
+            shutil.rmtree(test_save_dir)
+        os.mkdir(test_save_dir)
+
+        result = foo(*args, **kwargs)
+
+        # delete save directory
+        shutil.rmtree(test_save_dir)
+
+        return result
+    return wrapped
+
+# basic tests ----------------------------------------
+
 class TestSubclass(Trainable):
-    save_dir = 'test_ckpts'
+    save_dir = test_save_dir
+    default_init_kwargs = dict(
+        seed=1,
+        optim_type=torch.optim.Adam,
+        optim_kwargs={'lr': 3e-4},
+        data_name='unittest',
+        h=64)
 
     @staticmethod
     def easy_init():
-        trainable = TestSubclass(
-            seed=1,
-            optim_type=torch.optim.Adam,
-            optim_kwargs={'lr': 3e-4},
-            data_name='unittest',
-            h=64
+        return TestSubclass(
+            **TestSubclass.default_init_kwargs
         )
-        return trainable
 
     def init_nn(self, h):
 
@@ -97,15 +118,10 @@ class Tester(TestCase):
         self.assertTrue(len(valid_log['two']) == 7)
         self.assertTrue(all(item == 2 for item in valid_log['two']))
 
+    @clean_save_dir_wrapper
     def test_saving(self):
 
         tr = TestSubclass.easy_init()
-
-        # set up save directory
-        if os.path.exists(tr.save_dir):
-            shutil.rmtree(tr.save_dir)
-        os.mkdir(tr.save_dir)
-
         tr.set_save_valid_conditions(
             'save', 'every', 2, 'epochs'
         )
@@ -114,5 +130,55 @@ class Tester(TestCase):
         files = os.listdir(tr.save_dir)
         self.assertTrue(len(files) == 5)
 
-        # delete save directory
-        shutil.rmtree(tr.save_dir)
+
+# test CudaCompatibleMixin --------------------------
+
+class TestCudaNet(CudaCompatibleMixin, TestSubclass):
+
+    @staticmethod
+    def easy_init():
+        return TestCudaNet(
+            **TestCudaNet.default_init_kwargs
+        )
+
+
+class CudaTester(TestCase):
+
+    def test_train(self):
+
+        tr = TestCudaNet.easy_init()
+        tr.cuda()
+        for _ in range(3):
+            tr.train_one_epoch()
+        self.assertTrue(tr.epochs == 3)
+
+    @clean_save_dir_wrapper
+    def test_mixed_training(self):
+        """
+        Check that we can train on mix of CPU and GPU,
+        and that we can save on GPU and then load straight
+        onto CPU.
+        """
+        # initialise and train on cpu
+        tr = TestCudaNet.easy_init()
+        self.assertTrue(tr.device.type == 'cpu')
+        tr.train_one_epoch()
+
+        # train on mixture of cpu and gpu
+        for send_func, device in [(tr.to_cuda, 'cuda'),
+                                  (tr.to_cpu, 'cpu'),
+                                  (tr.to_cuda, 'cuda')]:
+            send_func()
+            self.assertTrue(tr.device.type == device)
+            tr.train_one_epoch()
+
+        # save checkpoint from gpu
+        tr.save_checkpoint()
+ 
+        # initialise new model and reload checkpoint
+        tr = TestCudaNet.easy_init()
+        tr.load_checkpoint()
+        print(tr.device.type)
+        tr.train_one_epoch()
+        self.assertTrue(tr.device.type == 'cpu')
+        self.assertTrue(tr.epochs == 5)
