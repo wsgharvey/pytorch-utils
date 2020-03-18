@@ -341,8 +341,8 @@ class HasDataloaderMixin():
 
     def train_n_epochs(self, max_epochs):
 
-        self.valid_and_save_if_necessary()
         self.load_checkpoint()
+        self.valid_and_save_if_necessary()
         while self.epochs < max_epochs:
             self.train_epoch()
         self.save_checkpoint()
