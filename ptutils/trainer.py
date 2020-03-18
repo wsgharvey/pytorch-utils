@@ -427,7 +427,7 @@ class CudaCompatibleMixin():
 
     @args_to_device_wrapper
     def uncontrolled_valid_batch(self, *data):
-        super().uncontrolled_step(*data)
+        super().uncontrolled_valid_batch(*data)
 
 
 class ImageClassifier(Trainable):
