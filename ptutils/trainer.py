@@ -399,7 +399,6 @@ class CudaCompatibleMixin():
         def wrapped_f(self, *args, **kwargs):
             was_cuda = self.is_cuda()
             self.to_cpu()
-            print(f'doing {f} on {self.device}')
             result = f(self, *args, **kwargs)
             if was_cuda:
                 self.to_cuda()

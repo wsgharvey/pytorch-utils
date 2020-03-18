@@ -174,11 +174,10 @@ class CudaTester(TestCase):
 
         # save checkpoint from gpu
         tr.save_checkpoint()
- 
+
         # initialise new model and reload checkpoint
         tr = TestCudaNet.easy_init()
         tr.load_checkpoint()
-        print(tr.device.type)
         tr.train_one_epoch()
         self.assertTrue(tr.device.type == 'cpu')
         self.assertTrue(tr.epochs == 5)
