@@ -331,6 +331,21 @@ class Trainable(nn.Module):
                 f" epochs in {self.training_time} seconds.")
         self.eval()
 
+    def load_best_checkpoint(self):
+        with display_level(print_info=False):
+            self.load_checkpoint()
+        valids = self.losses['valid']
+        if len(valids) == 0:
+            raise Exception("No saved checkpoints.")
+            return
+        assert hasattr(self, 'best_eval_op'), \
+            "Must specify best_eval_op (probably `max` or `min`)."
+        best_index = valids.index(self.best_evaluation_op(valids))
+        best_n_epochs = self.timed_valid_epochs.keys()[best_index]
+        self.load_checkpoint(max_epochs=best_n_epochs)
+        assert self.epochs == best_n_epochs, \
+            f"No checkpoints saved at best valid loss "+\
+            f"(after {best_n_epochs} epochs)."
 
 class HasDataloaderMixin():
     """
