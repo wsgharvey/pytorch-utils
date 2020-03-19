@@ -99,7 +99,8 @@ class Trainable(nn.Module):
         # loss should be mean over minibatch
         raise NotImplementedError
 
-    def valid_metric(self, *args, **kwargs):
+    def eval_metric(self, *args, **kwargs):
+        # valid / eval metric
 
         return self.loss(*args, **kwargs)
 
@@ -152,27 +153,40 @@ class Trainable(nn.Module):
 
         self.eval()
         self.log = {}
-        self.valid_rng = RNG(0)
+        self.eval_rng = RNG(0)
         self.valid_metric_averager = Averager()
         self.valid_log_averager = DictAverager()
 
-    def uncontrolled_valid_batch(self, *data, batch_size=None):
+    def uncontrolled_eval_batch(self, *data, batch_size=None):
 
         if batch_size is None:
             batch_size = data[0].shape[0]
         with torch.no_grad():
-            with self.valid_rng:
-                self.valid_metric_averager.include(
-                    self.valid_metric(*data).item(), batch_size
-                )
-                self.valid_log_averager.include(
-                    self.log, batch_size
-                )
+            metric = self.eval_metric(*data).item()
+            self.valid_metric_averager.include(
+                metric, batch_size
+            )
+            self.valid_log_averager.include(
+                self.log, batch_size
+            )
 
-    def valid_batch(self, *args, **kwargs):
+    def eval_batch(self, *args, **kwargs):
 
-        with self.valid_rng:
-            return self.uncontrolled_valid_batch(*args, **kwargs)
+        with self.eval_rng:
+            return self.uncontrolled_eval_batch(*args, **kwargs)
+
+    def begin_eval(self):
+
+        self.testing = True
+        return self.begin_valid()
+
+    def end_eval(self):
+
+        assert self.testing
+        self.testing = False
+        display('info', f'returned: {self.valid_metric_averager.avg}')
+        display('info', f'logged: {self.valid_log_averager.avg}')
+        return self.valid_metric_averager.avg, self.valid_log_averager.avg
 
     def end_valid(self):
 
@@ -324,17 +338,31 @@ class HasDataloaderMixin():
     data from a data-loader into .step(...)
     """
 
-    def set_dataloaders(self, train_loader, valid_loader):
+    @staticmethod
+    def iter_tupled(iterator):
+        """
+        - if items in sequence are not tuples, wrap them in tuples
+        - needed so that functions returning single item are treated
+        similarly to functions returning multiple
+        """
+        for item in iterator:
+            if isinstance(item, tuple) or isinstance(item, list):
+                yield item
+            else:
+                yield (item,)
+
+    def set_dataloaders(self, train_loader, valid_loader, eval_loader):
 
         self.train_loader = train_loader
         self.valid_loader = valid_loader
+        self.eval_loader = eval_loader
 
     def train_epoch(self):
 
         self.begin_epoch()
         with self.rng:
             with tqdm(total=len(self.train_loader)) as pbar:
-                for data in self.train_loader:
+                for data in self.iter_tupled(self.train_loader):
                     self.uncontrolled_step(*data)
                     pbar.update(1)
         self.end_epoch()
@@ -350,11 +378,19 @@ class HasDataloaderMixin():
     def validate(self):
 
         self.begin_valid()
-        with self.valid_rng:
-            for data in self.valid_loader:
-                self.uncontrolled_valid_batch(*data)
+        with self.eval_rng:
+            for data in self.iter_tupled(self.valid_loader):
+                self.uncontrolled_eval_batch(*data)
         self.end_valid()
         display("info", "validation:", self.losses['valid'][-1])
+
+    def evaluate(self):
+
+        self.begin_eval()
+        with self.eval_rng:
+            for data in self.iter_tupled(self.eval_loader):
+                self.uncontrolled_eval_batch(*data)
+        return self.end_eval()
 
 
 class CudaCompatibleMixin():
@@ -426,123 +462,5 @@ class CudaCompatibleMixin():
         super().uncontrolled_step(*data)
 
     @args_to_device_wrapper
-    def uncontrolled_valid_batch(self, *data):
-        super().uncontrolled_valid_batch(*data)
-
-
-class ImageClassifier(Trainable):
-    """
-    Subclass of Trainable designed for image classifiers with standard
-    data loaders etc which make training simpler. Controls randomness
-    of data loader along with randomness of everything else. Also
-    sends data to correct device.
-    """
-
-    best_valid_op = min    # used to decide if valid loss is new best
-
-    def __init__(self, dataset_name, batch_size,
-                 *args, dataloader_kwargs={}, **kwargs):
-
-        for key, value in get_dataset_info(dataset_name).items():
-            setattr(self, key, value)
-            # img_shape, img_channels, n_classes, loss_weights
-
-        self.short_dataset_name = dataset_name
-        self.batch_size = batch_size
-        self.dataloader_kwargs = dataloader_kwargs
-        self.dataset_name = f"{dataset_name}_{batch_size}"
-        # all arguments are sent to parent to make hash
-        # for saving
-        super().__init__(
-            *args, **kwargs,
-            data_name=f"{dataset_name}_{batch_size}",
-            extra_things_to_use_in_hash=dataloader_kwargs
-        )
-
-    @cached_property
-    def train_loader(self):
-
-        return get_dataloader(self.short_dataset_name,
-                              self.batch_size, 'train',
-                              valid_proportion=0.1,
-                              **self.dataloader_kwargs)
-
-    @cached_property
-    def valid_loader(self):
-
-        return get_dataloader(self.short_dataset_name,
-                              self.batch_size, 'valid',
-                              valid_proportion=0.1,
-                              **self.dataloader_kwargs)
-
-    def validate(self):
-
-        self.begin_valid()
-        # we don't use self.valid_batch as it doesn't
-        # manage dataloader's random seed
-        with torch.no_grad():
-            with RNG(0):
-                for data in self.valid_loader:
-                    data = self.send_all_to_own_device(*data)
-                    batch_size = data[0].shape[0]
-                    self.valid_loss_averager.include(
-                        self.valid_loss(*data).item(),
-                        batch_size
-                    )
-                    self.valid_log_averager.include(
-                        self.log, batch_size
-                    )
-        self.end_valid()
-        display("info", "validation:", self.losses['valid'][-1])
-
-    def got_best_valid(self):
-
-        valids = self.losses["valid"]
-        if len(valids) <= 1:
-            return False
-        return valids[-1] == self.best_valid_op(valids)
-
-    def train_epoch(self):
-
-        self.begin_epoch()
-        with self.rng:
-            with tqdm(total=len(self.train_loader)) as pbar:
-                for data in self.train_loader:
-                    data = self.send_all_to_own_device(*data)
-                    self.uncontrolled_step(*data)
-                    pbar.update(1)
-        self.validate()
-        self.end_epoch()
-
-    def train_n_epochs(self, max_epochs):
-
-        self.load_checkpoint()
-        if self.epochs == 0:
-            self.validate()
-        while self.epochs < max_epochs:
-            self.train_epoch()
-            if self.got_best_valid():
-                display("info", f"New best validation after {self.epochs} epochs.")
-                self.save_checkpoint()
-        self.save_checkpoint()
-
-    @property
-    def device(self):
-        # this assumes all of self is on same device
-        return next(self.parameters()).device
-
-    def send_all_to_own_device(self, *args):
-        return tuple(arg.to(self.device) for arg in args)
-
-    def load_best_checkpoint(self):
-        with display_level(print_info=False):
-            self.load_checkpoint()
-        valids = self.losses['valid']
-        if len(valids) == 0:
-            raise Exception("No saved checkpoints.")
-            return
-        best_n_epochs = valids.index(self.best_valid_op(valids))
-        self.load_checkpoint(max_epochs=best_n_epochs)
-        assert self.epochs == best_n_epochs, \
-            f"No checkpoints saved at best valid loss "+\
-            f"(after {best_n_epochs} epochs)."
+    def uncontrolled_eval_batch(self, *data):
+        super().uncontrolled_eval_batch(*data)

@@ -213,8 +213,8 @@ class get_args_decorator():
         def wrapped(*args, **kwargs):
             return foo(
                 *args, **kwargs,
-                all_args=(args[self.start:],
-                          kwargs))
+                all_args=(args[self.start:], kwargs)
+            )
         return wrapped
 
 def make_hashable(obj):

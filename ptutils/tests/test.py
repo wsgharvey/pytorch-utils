@@ -1,11 +1,12 @@
 import os
 import shutil
 from functools import wraps
+from numbers import Number
 
 import torch
 import torch.nn as nn
 
-from ptutils import Trainable, CudaCompatibleMixin
+from ptutils import Trainable, HasDataloaderMixin, CudaCompatibleMixin
 
 from unittest import TestCase
 
@@ -59,9 +60,9 @@ class TestSubclass(Trainable):
                     'two': torch.tensor(2.)}
         return loss
 
-    def valid_metric(self, *args, **kwargs):
+    def eval_metric(self, *args, **kwargs):
 
-        m = super().valid_metric(*args, **kwargs)
+        m = super().eval_metric(*args, **kwargs)
         self.log['is_valid'] = 1
         return m
 
@@ -70,7 +71,7 @@ class TestSubclass(Trainable):
         self.begin_valid()
         for _ in range(2):
             data = torch.randn(8, 1)
-            self.valid_batch(data)
+            self.eval_batch(data)
         self.end_valid()
 
     def train_one_epoch(self):
@@ -123,13 +124,59 @@ class Tester(TestCase):
 
         tr = TestSubclass.easy_init()
         tr.set_save_valid_conditions(
-            'save', 'every', 2, 'epochs'
-        )
+            'save', 'every', 2, 'epochs')
         for _ in range(10):
             tr.train_one_epoch()
         files = os.listdir(tr.save_dir)
         self.assertTrue(len(files) == 5)
 
+
+# test HasDataloaderMixin --------------------------
+
+class TestDataloaderNet(HasDataloaderMixin, TestSubclass):
+
+    class Loader():
+
+        def __init__(self, data):
+
+            self.data = data
+
+        def __len__(self):
+
+            return len(self.data)
+
+        def __iter__(self):
+
+            for row in self.data:
+                yield row
+
+    @staticmethod
+    def easy_init():
+
+        tr = TestDataloaderNet(
+            **TestDataloaderNet.default_init_kwargs
+        )
+        train_loader = torch.randn(5, 1)
+        valid_loader = torch.randn(5, 1)
+        test_loader = torch.randn(5, 1)
+        tr.set_dataloaders(
+            train_loader, valid_loader, test_loader)
+        return tr
+
+class DataloaderTester(TestCase):
+
+    @clean_save_dir_wrapper
+    def test_train(self):
+
+        tr = TestDataloaderNet.easy_init()
+        tr.train_n_epochs(3)
+        self.assertTrue(tr.epochs == 3)
+
+    def test_evaluate(self):
+
+        tr = TestDataloaderNet.easy_init()
+        metric, log = tr.evaluate()
+        self.assertTrue(isinstance(metric, Number))
 
 # test CudaCompatibleMixin --------------------------
 
