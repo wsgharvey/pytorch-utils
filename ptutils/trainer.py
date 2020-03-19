@@ -338,8 +338,8 @@ class Trainable(nn.Module):
         if len(valids) == 0:
             raise Exception("No saved checkpoints.")
             return
-        assert hasattr(self, 'best_eval_op'), \
-            "Must specify best_eval_op (probably `max` or `min`)."
+        assert hasattr(self, 'best_evaluation_op'), \
+            "Must specify best_evaluation_op (probably `max` or `min`)."
         best_index = valids.index(self.best_evaluation_op(valids))
         best_n_epochs = self.timed_valid_epochs.keys()[best_index]
         self.load_checkpoint(max_epochs=best_n_epochs)
