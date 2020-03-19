@@ -341,7 +341,7 @@ class Trainable(nn.Module):
         assert hasattr(self, 'best_evaluation_op'), \
             "Must specify best_evaluation_op (probably `max` or `min`)."
         best_index = valids.index(self.best_evaluation_op(valids))
-        best_n_epochs = self.timed_valid_epochs.keys()[best_index]
+        best_n_epochs = list(self.timed_valid_epochs.keys())[best_index]
         self.load_checkpoint(max_epochs=best_n_epochs)
         assert self.epochs == best_n_epochs, \
             f"No checkpoints saved at best valid loss "+\
