@@ -155,13 +155,22 @@ class Trainable(nn.Module):
             self.logs[mode][key].append(
                 to_numpy(value))
 
-    def begin_valid(self):
+    def begin_valid_eval(self):
 
         self.eval()
         self.log = {}
         self.eval_rng = RNG(0)
         self.valid_metric_averager = Averager()
         self.valid_log_averager = DictAverager()
+
+    def begin_valid(self):
+
+        return self.begin_valid_eval()
+
+    def begin_eval(self):
+
+        self.testing = True
+        return self.begin_valid_eval()
 
     def uncontrolled_eval_batch(self, *data, batch_size=None):
 
@@ -181,25 +190,26 @@ class Trainable(nn.Module):
         with self.eval_rng:
             return self.uncontrolled_eval_batch(*args, **kwargs)
 
-    def begin_eval(self):
+    def end_valid_eval(self):
 
-        self.testing = True
-        return self.begin_valid()
+        pass
+
+    def end_valid(self):
+
+        self.end_valid_eval()
+        self.losses['valid'].append(
+            self.valid_metric_averager.avg)
+        # average stuff in valid_log
+        self.update_log('valid', self.valid_log_averager.avg)
 
     def end_eval(self):
 
+        self.end_valid_eval()
         assert self.testing
         self.testing = False
         display('info', f'returned: {self.valid_metric_averager.avg}')
         display('info', f'logged: {self.valid_log_averager.avg}')
         return self.valid_metric_averager.avg, self.valid_log_averager.avg
-
-    def end_valid(self):
-
-        self.losses['valid'].append(
-            self.valid_metric_averager.avg)
-        # average stuff in valid_log
-        self.update_log('valid', self.valid_log_averager.avg)
 
     def begin_epoch(self):
 
