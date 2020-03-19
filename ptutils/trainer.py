@@ -56,6 +56,8 @@ class Trainable(nn.Module):
         # change throughout training and untracked
         None
 
+        self.post_init()
+
     def init_save_valid_conditions(self):
         self.save_at_times = IntSeq([])
         self.save_at_epochs = IntSeq([])
@@ -93,6 +95,10 @@ class Trainable(nn.Module):
     def init_nn(self, **nn_kwargs):
 
         raise NotImplementedError
+
+    def post_init(self):
+
+        pass
 
     def loss(self, *data):
 
