@@ -12,8 +12,9 @@ import torch.nn as nn
 
 from ptutils.datasets import get_dataloader, get_dataset_info
 from ptutils.utils import RNG, Averager, DictAverager,\
-    display, display_level, get_args_decorator, robust_hash, \
-    to_numpy, IntSeq, state_dict_to
+    get_args_decorator, robust_hash, to_numpy, IntSeq,\
+    state_dict_to
+from exputils import display, display_level
 
 
 class Trainable(nn.Module):

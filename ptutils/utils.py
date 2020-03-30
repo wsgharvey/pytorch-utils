@@ -66,62 +66,6 @@ class rng_decorator():
 
         return wrapped_f
 
-# printing ---------------------------------------------
-
-def set_display(info=True):
-
-    global print_info
-    print_info = True
-
-set_display()   # set with default values
-
-def display(level, *args, **kwargs):
-
-    assert level in [
-        "info", "error", "user-requested"
-    ]
-    global print_info
-    if level == "info" and not print_info:
-        return
-
-    print(*args, **kwargs)
-
-
-class display_level():
-
-    def __init__(self, print_info):
-
-        self.inside = print_info
-
-    def __enter__(self):
-
-        global print_info
-        self.outside = print_info
-        print_info = self.inside
-
-    def __exit__(self, *args, **kwargs):
-
-        global print_info
-        print_info = self.outside
-
-
-class display_level_decorator():
-
-    def __init__(self, *args, **kwargs):
-        self.display_args = args
-        self.display_kwargs = kwargs
-
-    def __call__(self, f):
-
-        def wrapped_f(*args, **kwargs):
-
-            with display_level(*self.display_args,
-                               **self.display_kwargs):
-
-                return f(*args, **kwargs)
-
-        return wrapped_f
-
 # other ------------------------------------------------
 
 def predictions_per_class(pred, y):
