@@ -19,9 +19,9 @@ def display(level, *args, **kwargs):
 
 class display_level():
 
-    def __init__(self, _print_info):
+    def __init__(self, print_info):
 
-        self.inside = _print_info
+        self.inside = print_info
 
     def __enter__(self):
 
