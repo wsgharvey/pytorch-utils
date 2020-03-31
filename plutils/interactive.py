@@ -6,24 +6,26 @@ class TrainableTracker(ExperimentTracker):
     table_getter = None
     init_from_args = None
 
-    def load_from_id(self, ID):
+    def load_from_id(self, ID, *args, **kwargs):
 
         return self.load_from_args(
-            self.load_from_id(ID)
+            self.get_from_id(ID),
+            *args, **kwargs
         )
 
     def load_from_args(self, args,
                        n_epochs=None,
                        time=None,
                        is_best=False,
-                       is_latest=False):
+                       is_latest=False,
+                       *extraargs, **extrakwargs):
 
         # check only one option specified
         is_epochs = n_epochs is not None
         is_timed = time is not None
         assert sum([is_epochs, is_timed, is_best, is_latest]) == 1
 
-        net = self.init_from_args(args)
+        net = self.init_from_args(args, *extraargs, **extrakwargs)
         if is_epochs:
             net.load_checkpoint(max_epochs=n_epochs)
             assert net.epochs == n_epochs

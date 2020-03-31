@@ -79,7 +79,7 @@ class ExperimentTracker():
     def get_from_id(self, ID):
 
         with self.table_getter as table:
-            return table.find(ID=ID)
+            return next(iter(table.find(ID=ID)))
 
     def get_from_num(self, num):
 
