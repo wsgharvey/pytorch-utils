@@ -403,9 +403,11 @@ class HasDataloaderMixin():
 
         self.load_checkpoint()
         self.valid_and_save_if_necessary()
+        start_epochs = self.epochs
         while self.epochs < max_epochs:
             self.train_epoch()
-        self.save_checkpoint()
+        if self.epochs > start_epochs:
+            self.save_checkpoint()
 
     def validate(self):
 
