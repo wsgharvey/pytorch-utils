@@ -2,6 +2,7 @@ import os
 import shutil
 from functools import wraps
 from numbers import Number
+import copy
 
 import torch
 import torch.nn as nn
@@ -33,11 +34,11 @@ def clean_save_dir_wrapper(foo):
 class TestSubclass(Trainable):
     save_dir = test_save_dir
     default_init_kwargs = dict(
-        seed=1,
-        optim_type=torch.optim.Adam,
-        optim_kwargs={'lr': 3e-4},
-        data_name='unittest',
-        h=64)
+        seed=123,
+        name_prefix='unit-test',
+        optim_args=dict(type=torch.optim.Adam, lr=3e-4),
+        nn_args=dict(h=64),
+    )
 
     @staticmethod
     def easy_init():
@@ -135,20 +136,29 @@ class Tester(TestCase):
 
 class TestDataloaderNet(HasDataloaderMixin, TestSubclass):
 
-    class Loader():
+    # class Loader():
 
-        def __init__(self, data):
+    #     def __init__(self, data):
 
-            self.data = data
+    #         self.data = data
 
-        def __len__(self):
+    #     def __len__(self):
 
-            return len(self.data)
+    #         return len(self.data)
 
-        def __iter__(self):
+    #     def __iter__(self):
 
-            for row in self.data:
-                yield row
+    #         for row in self.data:
+    #             yield row
+
+    def set_default_dataloaders(self):
+
+        train_loader = torch.randn(5, 1)
+        valid_loader = torch.randn(5, 1)
+        test_loader = torch.randn(5, 1)
+        self.set_dataloaders(
+            train_loader, valid_loader, test_loader
+        )
 
     @staticmethod
     def easy_init():
@@ -156,11 +166,7 @@ class TestDataloaderNet(HasDataloaderMixin, TestSubclass):
         tr = TestDataloaderNet(
             **TestDataloaderNet.default_init_kwargs
         )
-        train_loader = torch.randn(5, 1)
-        valid_loader = torch.randn(5, 1)
-        test_loader = torch.randn(5, 1)
-        tr.set_dataloaders(
-            train_loader, valid_loader, test_loader)
+        tr.set_default_dataloaders()
         return tr
 
 class DataloaderTester(TestCase):
@@ -228,3 +234,53 @@ class CudaTester(TestCase):
         tr.train_one_epoch()
         self.assertTrue(tr.device.type == 'cpu')
         self.assertTrue(tr.epochs == 5)
+
+# test deriving class with scheduler LR -------------
+
+class ScheduledNet(TestDataloaderNet):
+
+    def init_optim(self, **kwargs):
+
+        self.optim = torch.optim.Adam(self.parameters(), lr=kwargs['lr'])
+        self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=kwargs['gamma'])
+
+    def end_epoch(self):
+        self.lr_scheduler.step()
+        super().end_epoch()
+
+    @staticmethod
+    def easy_init():
+        init_kwargs = copy.deepcopy(ScheduledNet.default_init_kwargs,)
+        init_kwargs['optim_args']['lr'] = 0.1
+        init_kwargs['optim_args']['gamma'] = 0.1
+        sn = ScheduledNet(
+            **init_kwargs
+        )
+        sn.set_default_dataloaders()
+        return sn
+
+    def post_init(self):
+
+        self.add_logger(
+            'optim',
+            lambda self: {'optim': self.optim.state_dict(),
+                          'lr': self.lr_scheduler.state_dict()},
+            lambda self, state: (self.optim.load_state_dict(state['optim']),
+                                 self.lr_scheduler.load_state_dict(state['lr']),),
+            on_cuda=True,)
+
+
+class SchedulerTester(TestCase):
+
+    @clean_save_dir_wrapper
+    def test_train(self):
+
+        tr = ScheduledNet.easy_init()
+        def check_lr(n_epochs):
+            tr.train_n_epochs(n_epochs)
+            lr = tr.optim.state_dict()['param_groups'][0]['lr']
+            should_be = 0.1 * 0.1**n_epochs
+            approx_eq = lambda a, b: abs(a-b)/(a+b) < 1e-8
+            self.assertTrue(approx_eq(lr, should_be))
+        check_lr(2)
+        check_lr(4)

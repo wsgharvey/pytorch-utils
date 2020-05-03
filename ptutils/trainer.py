@@ -2,6 +2,8 @@ from os.path import join, basename
 from glob import glob
 from time import time
 from tqdm import tqdm
+import copy
+import functools
 from cached_property import cached_property
 import operator
 from collections import OrderedDict
@@ -17,6 +19,7 @@ from ptutils.utils import RNG, Averager, DictAverager,\
 from exputils import display, display_level
 
 
+
 class Trainable(nn.Module):
     """
     Trainable nets should be subclass of this. Implements saving
@@ -24,38 +27,72 @@ class Trainable(nn.Module):
     """
     save_dir = "ckpts"
 
+    def add_logger(self, attr, getter=None, setter=None,
+                   on_cuda=False):
+        # on_cuda:  whether to move to gpu for CUDA training
+
+        if not hasattr(self, 'logged_attrs'):
+            self.logged_attrs = {}
+            self.cuda_attrs = set()
+
+        if getter is None:
+            def getter(obj):
+                return getattr(obj, attr)
+        if setter is None:
+            def setter(obj, value):
+                setattr(obj, attr, value)
+        self.logged_attrs[attr] = (getter, setter)
+        if on_cuda:
+            self.cuda_attrs.add(attr)
+
     @get_args_decorator(1)
-    def __init__(self, seed, optim_type, optim_kwargs,
-                 data_name, extra_things_to_use_in_hash=tuple(),
-                 all_args=None, **nn_kwargs):
-        """
-        `data_name` is just used to create filename
-        """
+    # '*' makes following args keyword args
+    def __init__(self, *, seed, name_prefix='',
+                 extra_things_to_use_in_hash=tuple(),
+                 nn_args, optim_args, all_args):
+
         self.args_hash = robust_hash(all_args)
 
         super().__init__()
 
         # static
         self.init_seed = seed
-        self.data_name = data_name
+        self.name_prefix = name_prefix
         self.init_save_valid_conditions()
 
-        # change throughout training and saved in checkpoints
+        # initialise RNG, weights and optimiser
         self.rng = RNG(seed=self.init_seed)
         with self.rng:
-            self.init_nn(**nn_kwargs)
-            self.optim = optim_type(self.parameters(), **optim_kwargs)
+            self.init_nn(**nn_args)
+            self.init_optim(**optim_args)
+        # add them to logs
+        self.add_logger(
+            'rng', lambda self: self.rng.get_state(),
+            lambda self, state: self.rng.set_state(state),)
+        self.add_logger(
+            'weights', lambda self: self.state_dict(),
+            lambda self, state: self.load_state_dict(state),
+            on_cuda=True,)
+        self.add_logger(
+            'optim', lambda self: self.optim.state_dict(),
+            lambda self, state: self.optim.load_state_dict(state),
+            on_cuda=True,)
+
+        # things we need to keep track of (and log) throughout training
         self.epochs = 0
+        self.add_logger('epochs')
         self.losses = {'train': [], 'valid': []}
+        self.add_logger('losses')
         self.logs = {'train': {}, 'valid': {}}
+        self.add_logger('logs')
         self.training_time = 0
+        self.add_logger('training_time')
         # structures to track validation/saving by mapping valid/save
         # epochs to list of times they represent
         self.timed_valid_epochs = OrderedDict([])
+        self.add_logger('timed_valid_epochs')
         self.timed_save_epochs = OrderedDict([])
-
-        # change throughout training and untracked
-        None
+        self.add_logger('timed_save_epochs')
 
         self.post_init()
 
@@ -97,6 +134,11 @@ class Trainable(nn.Module):
 
         raise NotImplementedError
 
+    def init_optim(self, **kwargs):
+        kwargs = copy.deepcopy(kwargs)
+        optim_type = kwargs.pop('type')
+        self.optim = optim_type(self.parameters(), **kwargs)
+
     def post_init(self):
 
         pass
@@ -124,7 +166,7 @@ class Trainable(nn.Module):
     @property
     def name(self):
 
-        return f"{self.data_name}_{self.architecture_name}_"+\
+        return f"{self.name_prefix}_{self.architecture_name}_"+\
             f"{self.optimiser_name}_{self.init_seed}_{self.args_hash}"
 
     def get_path(self, n_epochs):
@@ -285,21 +327,29 @@ class Trainable(nn.Module):
             self.timed_save_epochs, self.save_checkpoint
         )
 
+
+    def get_trainable_state(self):
+
+        ckpt = {}
+        for attr, (getter, setter) in  self.logged_attrs.items():
+            ckpt[attr] = getter(self)
+        return ckpt
+
+    def set_trainable_state(self, ckpt, allow_missing_attrs=False):
+
+        for attr, (getter, setter) in self.logged_attrs.items():
+            if attr in ckpt:
+                setter(self, ckpt[attr])
+            elif not allow_missing_attrs:
+                raise Exception(f'Missing {attr} from state dict.')
+
     def save_checkpoint(self):
 
         display('info', 'Saving Checkpoint.')
-        path = self.get_path(self.epochs)
-        f = {'optim': self.optim.state_dict(),
-             'rng': self.rng.get_state(),
-             'params': self.state_dict(),
-             'epochs': self.epochs,
-             'losses': self.losses,
-             'logs': self.logs,
-             'training_time': self.training_time,
-             'timed_valid_epochs': self.timed_valid_epochs,
-             'timed_save_epochs': self.timed_save_epochs,
-             }
-        torch.save(f, path)
+        torch.save(
+            self.get_trainable_state(),
+            self.get_path(self.epochs),
+        )
 
     def load_timed_checkpoint(self, training_time):
 
@@ -330,19 +380,11 @@ class Trainable(nn.Module):
             return
         checkpoint = matches[max(matches)]
         try:
-            f = torch.load(checkpoint)
+            t = torch.load(checkpoint)
         except EOFError as err:
             display('error', f"Failed to open: {checkpoint}")
             raise err
-        self.rng.set_state(f['rng'])
-        self.optim.load_state_dict(f['optim'])
-        self.load_state_dict(f['params'])
-        self.epochs = f['epochs']
-        self.losses = f['losses']
-        self.logs = f['logs']
-        self.training_time = f['training_time']
-        self.timed_valid_epochs = f['timed_valid_epochs']
-        self.timed_save_epochs = f['timed_save_epochs']
+        self.set_trainable_state(t)
         display("info",
                 f"Loaded network trained for {self.epochs}"+\
                 f" epochs in {self.training_time} seconds.")
@@ -438,15 +480,28 @@ class CudaCompatibleMixin():
         # this assumes all of self is on same device
         return next(self.parameters()).device
 
+    def move_all_to_own_device(self):
+
+        state = self.get_trainable_state()
+        cuda_state = {k: v for k, v in state.items()
+                      if k in self.cuda_attrs}
+        self.set_trainable_state(
+            state_dict_to(
+                cuda_state,
+                self.device
+            ),
+            allow_missing_attrs=True
+        )
+
     def to_cuda(self):
 
         self.cuda()
-        self.optim_to_device(self.device)
+        self.move_all_to_own_device()
 
     def to_cpu(self):
 
         self.cpu()
-        self.optim_to_device(self.device)
+        self.move_all_to_own_device()
 
     def is_cuda(self):
 
@@ -459,11 +514,11 @@ class CudaCompatibleMixin():
             return arg
         return tuple(map(to_device_if_tensor, args))
 
-    def optim_to_device(self, device):
-        self.optim.load_state_dict(
-            state_dict_to(
-                self.optim.state_dict(),
-                self.device))
+    # def optim_to_device(self, device):
+    #     self.set_optim_state(
+    #         state_dict_to(
+    #             self.get_optim_state(),
+    #             self.device))
 
     def on_cpu_wrapper(f):
         def wrapped_f(self, *args, **kwargs):
