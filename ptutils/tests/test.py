@@ -248,6 +248,14 @@ class ScheduledNet(TestDataloaderNet):
         self.lr_scheduler.step()
         super().end_epoch()
 
+    def get_optim_state(self):
+        return {'optim': self.optim.state_dict(),
+                'lr': self.lr_scheduler.state_dict()}
+
+    def set_optim_state(self, state):
+        self.optim.load_state_dict(state['optim'])
+        self.lr_scheduler.load_state_dict(state['lr'])
+
     @staticmethod
     def easy_init():
         init_kwargs = copy.deepcopy(ScheduledNet.default_init_kwargs,)
@@ -258,16 +266,6 @@ class ScheduledNet(TestDataloaderNet):
         )
         sn.set_default_dataloaders()
         return sn
-
-    def post_init(self):
-
-        self.add_logger(
-            'optim',
-            lambda self: {'optim': self.optim.state_dict(),
-                          'lr': self.lr_scheduler.state_dict()},
-            lambda self, state: (self.optim.load_state_dict(state['optim']),
-                                 self.lr_scheduler.load_state_dict(state['lr']),),
-            on_cuda=True,)
 
 
 class SchedulerTester(TestCase):

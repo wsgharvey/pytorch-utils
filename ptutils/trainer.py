@@ -47,9 +47,10 @@ class Trainable(nn.Module):
 
     @get_args_decorator(1)
     # '*' makes following args keyword args
-    def __init__(self, *, seed, name_prefix='',
+    def __init__(self, *, seed, nn_args, optim_args,
+                 name_prefix='',
                  extra_things_to_use_in_hash=tuple(),
-                 nn_args, optim_args, all_args):
+                 all_args):
 
         self.args_hash = robust_hash(all_args)
 
@@ -74,8 +75,8 @@ class Trainable(nn.Module):
             lambda self, state: self.load_state_dict(state),
             on_cuda=True,)
         self.add_logger(
-            'optim', lambda self: self.optim.state_dict(),
-            lambda self, state: self.optim.load_state_dict(state),
+            'optim', lambda self: self.get_optim_state(),
+            lambda self, state: self.set_optim_state(state),
             on_cuda=True,)
 
         # things we need to keep track of (and log) throughout training
@@ -95,6 +96,12 @@ class Trainable(nn.Module):
         self.add_logger('timed_save_epochs')
 
         self.post_init()
+
+    def get_optim_state(self):
+        return self.optim.state_dict()
+
+    def set_optim_state(self, state):
+        return self.optim.load_state_dict(state)
 
     def init_save_valid_conditions(self):
         self.save_at_times = IntSeq([])
@@ -172,6 +179,11 @@ class Trainable(nn.Module):
     def get_path(self, n_epochs):
 
         return join(self.save_dir, f"{self.name}_{n_epochs}.checkpoint")
+
+    @property
+    def path(self):
+
+        return self.get_path(self.epochs)
 
     def get_epochs_from_path(self, path):
 
@@ -345,10 +357,12 @@ class Trainable(nn.Module):
 
     def save_checkpoint(self):
 
+        if not os.path.exists(self.save_dir):
+            os.makedirs(self.save_dir)
         display('info', 'Saving Checkpoint.')
         torch.save(
             self.get_trainable_state(),
-            self.get_path(self.epochs),
+            self.path,
         )
 
     def load_timed_checkpoint(self, training_time):
@@ -443,7 +457,7 @@ class HasDataloaderMixin():
 
     def train_n_epochs(self, max_epochs):
 
-        self.load_checkpoint()
+        self.load_checkpoint(max_epochs=max_epochs)
         self.valid_and_save_if_necessary()
         start_epochs = self.epochs
         while self.epochs < max_epochs:
