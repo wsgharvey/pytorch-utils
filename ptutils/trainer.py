@@ -1,4 +1,4 @@
-from os.path import join, basename
+import os
 from glob import glob
 from time import time
 from tqdm import tqdm
@@ -178,7 +178,7 @@ class Trainable(nn.Module):
 
     def get_path(self, n_epochs):
 
-        return join(self.save_dir, f"{self.name}_{n_epochs}.checkpoint")
+        return os.path.join(self.save_dir, f"{self.name}_{n_epochs}.checkpoint")
 
     @property
     def path(self):
@@ -187,7 +187,7 @@ class Trainable(nn.Module):
 
     def get_epochs_from_path(self, path):
 
-        fname = basename(path)
+        fname = os.path.basename(path)
         return int(fname[len(self.name+'_'):-len('.checkpoint')])
 
     # Can be overridden during loss calculations to store
@@ -451,8 +451,11 @@ class HasDataloaderMixin():
         with self.rng:
             with tqdm(total=len(self.train_loader)) as pbar:
                 for data in self.iter_tupled(self.train_loader):
+                    self.tqdm_text = None
                     self.uncontrolled_step(*data)
                     pbar.update(1)
+                    if self.tqdm_text is not None:
+                        pbar.set_description(self.tqdm_text)
         self.end_epoch()
 
     def train_n_epochs(self, max_epochs):
