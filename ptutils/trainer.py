@@ -468,12 +468,16 @@ class HasDataloaderMixin():
         if self.epochs > start_epochs:
             self.save_checkpoint()
 
+    def uncontrolled_full_eval(self, loader):
+
+        for data in self.iter_tupled(loader):
+            self.uncontrolled_eval_batch(*data)
+
     def validate(self):
 
         self.begin_valid()
         with self.eval_rng:
-            for data in self.iter_tupled(self.valid_loader):
-                self.uncontrolled_eval_batch(*data)
+            self.uncontrolled_full_eval(self.valid_loader)
         self.end_valid()
         display("info", "validation:", self.losses['valid'][-1])
 
@@ -481,8 +485,7 @@ class HasDataloaderMixin():
 
         self.begin_eval()
         with self.eval_rng:
-            for data in self.iter_tupled(self.eval_loader):
-                self.uncontrolled_eval_batch(*data)
+            self.uncontrolled_full_eval(self.eval_loader)
         return self.end_eval()
 
 
