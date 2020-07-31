@@ -7,6 +7,7 @@ import functools
 from cached_property import cached_property
 import operator
 from collections import OrderedDict
+import wandb
 
 import numpy as np
 import torch
@@ -15,9 +16,8 @@ import torch.nn as nn
 from ptutils.datasets import get_dataloader, get_dataset_info
 from ptutils.utils import RNG, Averager, DictAverager,\
     get_args_decorator, robust_hash, to_numpy, IntSeq,\
-    state_dict_to
+    state_dict_to, make_hashable
 from exputils import display, display_level
-
 
 
 class Trainable(nn.Module):
@@ -52,6 +52,7 @@ class Trainable(nn.Module):
                  extra_things_to_use_in_hash=tuple(),
                  all_args):
 
+        self.all_kwargs = all_args[1]
         self.args_hash = robust_hash(all_args)
 
         super().__init__()
@@ -185,6 +186,11 @@ class Trainable(nn.Module):
 
         return self.get_path(self.epochs)
 
+    @ property
+    def num_iterations(self):
+
+        return len(self.losses['train'])
+
     def get_epochs_from_path(self, path):
 
         fname = os.path.basename(path)
@@ -196,8 +202,8 @@ class Trainable(nn.Module):
 
     def update_log(self, mode, update):
 
-        if not hasattr(self, 'log'):
-            return
+        # if not hasattr(self, 'log'):
+        #     return
         if len(self.logs[mode].keys()) == 0:
             # initialise log
             self.logs[mode] = \
@@ -207,8 +213,7 @@ class Trainable(nn.Module):
         assert set(update.keys()) == \
             set(self.logs[mode].keys())
         for key, value in update.items():
-            self.logs[mode][key].append(
-                to_numpy(value))
+            self.logs[mode][key].append(to_numpy(value))
 
     def begin_valid_eval(self):
 
@@ -494,10 +499,10 @@ class CudaCompatibleMixin():
     A mixin for Trainables that can be run on GPU by simply moving all
     parameters to GPU. Controls moving data to GPU
     and saving checkpoints on CPU (for easy loading on any device).
+    This mixin should be given to left of Trainable in class definition.
     """
     @property
     def device(self):
-        # this assumes all of self is on same device
         return next(self.parameters()).device
 
     def move_all_to_own_device(self):
@@ -527,18 +532,13 @@ class CudaCompatibleMixin():
 
         return self.device.type == 'cuda'
 
-    def send_all_to_own_device(self, args):
+    def send_args_to_own_device(self, args):
+
         def to_device_if_tensor(arg):
             if isinstance(arg, torch.Tensor):
                 return arg.to(self.device)
             return arg
         return tuple(map(to_device_if_tensor, args))
-
-    # def optim_to_device(self, device):
-    #     self.set_optim_state(
-    #         state_dict_to(
-    #             self.get_optim_state(),
-    #             self.device))
 
     def on_cpu_wrapper(f):
         def wrapped_f(self, *args, **kwargs):
@@ -552,11 +552,9 @@ class CudaCompatibleMixin():
 
     def args_to_device_wrapper(f):
         def wrapped_f(self, *args):
-            args = self.send_all_to_own_device(args)
+            args = self.send_args_to_own_device(args)
             return f(self, *args)
         return wrapped_f
-
-    # this mixin must be left of Trainable in class definition to make the below work
 
     @on_cpu_wrapper
     def save_checkpoint(self, *args, **kwargs):
@@ -573,3 +571,56 @@ class CudaCompatibleMixin():
     @args_to_device_wrapper
     def uncontrolled_eval_batch(self, *data):
         super().uncontrolled_eval_batch(*data)
+
+
+class WandbMixin():
+    """
+    A mixin to log progress with wandb. If a run is restarted, the original run and
+    restart should automatically be grouped together on wandb.
+    """
+    log_gradient_freq = None  # time period between logging (wandb calls it freq.)
+    wandb_init_kwargs = {}
+
+    def post_init(self):
+
+        self.init_wandb(self.wandb_project,)
+        if self.log_gradient_freq is not None:
+            wandb.watch(self, log='all', log_freq=self.log_gradient_freq)
+
+    def init_wandb(self, wandb_project):
+
+        wandb.init(
+            project=wandb_project,
+            group=self.wandb_group_name,
+            reinit=True,  # TODO what if we want to run a script with several
+                          # Trainables? does it work?,
+            config=make_hashable(self.all_kwargs, make_dict=True),
+            **self.wandb_init_kwargs,
+        )
+
+    @property
+    def wandb_group_name(self):
+
+        return self.name
+
+    def update_log(self, mode, metrics):
+        """
+        syncs to wandb instead of storing log
+        """
+        wandb_log = {
+            'time': self.training_time + time() - self.epoch_begin_time,
+            'epoch': self.epochs,
+            'iter': self.num_iterations,  # should be same as wandb's step
+        }
+        if mode == 'train':
+            wandb_log['iter'] = wandb_log['iter'] - 1
+        wandb_log.update(
+            {f'{mode}-{k}': to_numpy(v) for k, v in metrics.items()}
+        )
+        wandb_log[f'{mode}-loss'] = self.losses[mode][-1]
+
+        increment_step = (mode == 'train')
+        wandb.log(
+            wandb_log,
+            commit=increment_step,
+        )

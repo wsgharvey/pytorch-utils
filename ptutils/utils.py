@@ -147,6 +147,7 @@ class DictAverager(Averager):
         return {k: v/n
                 for k, v in o.items()}
 
+
 class get_args_decorator():
 
     def __init__(self, start):
@@ -161,20 +162,27 @@ class get_args_decorator():
             )
         return wrapped
 
-def make_hashable(obj):
+
+def make_hashable(obj, make_dict=False):
 
     # make objects including nested dictionaries hashable
     t = type(obj)
     if t in [dict, OrderedDict]:
-        return tuple(
-            make_hashable(entry) for entry in obj.items()
-        )
+        if make_dict:
+            return {
+                k: make_hashable(v, make_dict=True) for k, v in obj.items()}
+        else:
+            return tuple(make_hashable(entry) for entry in obj.items())
+
     elif t in [tuple, list]:
-        return tuple(
-            make_hashable(entry) for entry in obj
-        )
+        if make_dict:
+            return {str(i): make_hashable(v, make_dict=True) for v in obj}
+        else:
+            return tuple(make_hashable(entry) for entry in obj)
+
     elif t in [str, float, int, bool]:
         return obj
+
     else:
         try:
             return obj.__repr__()

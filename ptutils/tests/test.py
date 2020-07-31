@@ -136,21 +136,6 @@ class Tester(TestCase):
 
 class TestDataloaderNet(HasDataloaderMixin, TestSubclass):
 
-    # class Loader():
-
-    #     def __init__(self, data):
-
-    #         self.data = data
-
-    #     def __len__(self):
-
-    #         return len(self.data)
-
-    #     def __iter__(self):
-
-    #         for row in self.data:
-    #             yield row
-
     def set_default_dataloaders(self):
 
         train_loader = torch.randn(5, 1)
