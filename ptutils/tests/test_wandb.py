@@ -20,6 +20,12 @@ class WandbLoggedNet(WandbMixin, TestCudaNet):
             **WandbLoggedNet.default_init_kwargs,
         )
 
+    @staticmethod
+    def easy_init_other():
+        kwargs = WandbLoggedNet.default_init_kwargs
+        kwargs['seed'] = kwargs['seed'] + 1
+        return WandbLoggedNet(**kwargs)
+
 
 class WandbTester(TestCase):
 
@@ -56,3 +62,16 @@ class WandbTester(TestCase):
         self.assertTrue(history[0]['train-two'] == 2)
         self.assertTrue(history[2]['iter'] == history[2]['_step'])
         self.assertTrue(history[-1]['epoch'] == net.epochs)
+
+    @clean_save_dir_wrapper
+    def multiple_trainables(self):
+
+        net1 = WandbLoggedNet.easy_init()
+        net2 = WandbLoggedNet.easy_init_other()
+
+        # TODO check things are logged correctly for each
+        net1.train_one_epoch()
+        net1.train_one_epoch()
+        net2.train_one_epoch()
+        net1.train_one_epoch()
+

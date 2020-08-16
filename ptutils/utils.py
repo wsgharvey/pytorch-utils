@@ -176,7 +176,7 @@ def make_hashable(obj, make_dict=False):
 
     elif t in [tuple, list]:
         if make_dict:
-            return {str(i): make_hashable(v, make_dict=True) for v in obj}
+            return {str(i): make_hashable(v, make_dict=True) for i, v in enumerate(obj)}
         else:
             return tuple(make_hashable(entry) for entry in obj)
 

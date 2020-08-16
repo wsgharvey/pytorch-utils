@@ -229,7 +229,7 @@ class Trainable(nn.Module):
 
     def begin_eval(self):
 
-        self.testing = True
+        self.testing = True    # TODO change name of self.testing?
         return self.begin_valid_eval()
 
     def uncontrolled_eval_batch(self, *data, batch_size=None):
@@ -577,6 +577,9 @@ class WandbMixin():
     """
     A mixin to log progress with wandb. If a run is restarted, the original run and
     restart should automatically be grouped together on wandb.
+
+    This sends attributes in self.log to wandb rather than storing them locally. self.losses
+    are stored both locally and at wandb.
     """
     log_gradient_freq = None  # time period between logging (wandb calls it freq.)
     wandb_init_kwargs = {}
@@ -615,7 +618,8 @@ class WandbMixin():
         if mode == 'train':
             wandb_log['iter'] = wandb_log['iter'] - 1
         wandb_log.update(
-            {f'{mode}-{k}': to_numpy(v) for k, v in metrics.items()}
+            {f'{mode}-{k}': v if type(v) in [wandb.Image, wandb.Video] else to_numpy(v)
+             for k, v in metrics.items()}
         )
         wandb_log[f'{mode}-loss'] = self.losses[mode][-1]
 
