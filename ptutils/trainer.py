@@ -62,6 +62,22 @@ class Trainable(nn.Module):
         self.name_prefix = name_prefix
         self.init_save_valid_conditions()
 
+        # things we need to keep track of (and log) throughout training
+        self.epochs = 0
+        self.add_logger('epochs')
+        self.losses = {'train': [], 'valid': []}
+        self.add_logger('losses')
+        self.logs = {'train': {}, 'valid': {}}
+        self.add_logger('logs')
+        self.training_time = 0
+        self.add_logger('training_time')
+        # structures to track validation/saving by mapping valid/save
+        # epochs to list of times they represent
+        self.timed_valid_epochs = OrderedDict([])
+        self.add_logger('timed_valid_epochs')
+        self.timed_save_epochs = OrderedDict([])
+        self.add_logger('timed_save_epochs')
+
         # initialise RNG, weights and optimiser
         self.rng = RNG(seed=self.init_seed)
         with self.rng:
@@ -79,22 +95,6 @@ class Trainable(nn.Module):
             'optim', lambda self: self.get_optim_state(),
             lambda self, state: self.set_optim_state(state),
             on_cuda=True,)
-
-        # things we need to keep track of (and log) throughout training
-        self.epochs = 0
-        self.add_logger('epochs')
-        self.losses = {'train': [], 'valid': []}
-        self.add_logger('losses')
-        self.logs = {'train': {}, 'valid': {}}
-        self.add_logger('logs')
-        self.training_time = 0
-        self.add_logger('training_time')
-        # structures to track validation/saving by mapping valid/save
-        # epochs to list of times they represent
-        self.timed_valid_epochs = OrderedDict([])
-        self.add_logger('timed_valid_epochs')
-        self.timed_save_epochs = OrderedDict([])
-        self.add_logger('timed_save_epochs')
 
         self.post_init()
 
@@ -254,12 +254,21 @@ class Trainable(nn.Module):
 
         pass
 
+    def log_extra_validation(self):
+        """
+        Method can be overwritten for logging things that
+        shouldn't be averaged over validation batches.
+        """
+        pass
+
     def end_valid(self):
 
         self.end_valid_eval()
         self.losses['valid'].append(
             self.valid_metric_averager.avg)
         # average stuff in valid_log
+        self.log = self.valid_log_averager.avg
+        self.log_extra_validation()
         self.update_log('valid', self.valid_log_averager.avg)
 
     def end_eval(self):
@@ -614,8 +623,11 @@ class WandbMixin():
         """
         syncs to wandb instead of storing log
         """
+        training_time = self.training_time
+        if mode == 'train':
+            training_time += time() - self.epoch_begin_time
         wandb_log = {
-            'time': self.training_time + time() - self.epoch_begin_time,
+            'time': training_time,
             'epoch': self.epochs,
             'iter': self.num_iterations,  # should be same as wandb's step
         }
