@@ -283,9 +283,13 @@ class Trainable(nn.Module):
         loss = self.loss(*data)
         self.optim.zero_grad()
         loss.backward()
+        self.modify_gradients()
         self.optim.step()
         self.losses['train'].append(loss.item())
         self.update_log('train', self.log)
+
+    def modify_gradients(self):
+        pass
 
     def step(self, *data):
 
