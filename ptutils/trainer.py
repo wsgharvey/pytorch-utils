@@ -269,7 +269,7 @@ class Trainable(nn.Module):
         # average stuff in valid_log
         self.log = self.valid_log_averager.avg
         self.log_extra_validation()
-        self.update_log('valid', self.valid_log_averager.avg)
+        self.update_log('valid', self.log)
 
     def end_eval(self):
 
